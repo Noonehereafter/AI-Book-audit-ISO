@@ -8,30 +8,31 @@ from jinja2 import Template
 
 from epub_translate_audit.ai.schemas import AIFinding, ReleaseDecisionResponse
 from epub_translate_audit.compliance.iso17100 import ISO17100ComplianceReport
+from epub_translate_audit.compliance.iso5060 import ISO5060ComplianceReport
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <title>Báo Cáo Audit Bản Dịch EPUB (ISO 17100) - {{ run_id }}</title>
+    <title>Báo Cáo Audit Bản Dịch (ISO 17100 & ISO 5060) - {{ run_id }}</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 30px; background-color: #f9f9f9; color: #333; }
         .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .status-PASS, .status-COMPLIANT { color: #2e7d32; font-weight: bold; }
-        .status-CONDITIONAL_PASS, .status-CONDITIONALLY_COMPLIANT { color: #ed6c02; font-weight: bold; }
-        .status-FAIL, .status-NON_COMPLIANT { color: #d32f2f; font-weight: bold; }
+        .status-PASS, .status-COMPLIANT, .status-GRADE_A_EXCELLENT, .status-GRADE_B_ACCEPTABLE { color: #2e7d32; font-weight: bold; }
+        .status-CONDITIONAL_PASS, .status-CONDITIONALLY_COMPLIANT, .status-GRADE_C_MARGINAL { color: #ed6c02; font-weight: bold; }
+        .status-FAIL, .status-NON_COMPLIANT, .status-GRADE_F_UNACCEPTABLE { color: #d32f2f; font-weight: bold; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background-color: #f0f0f0; }
         .sev-critical { background-color: #ffebee; color: #c62828; font-weight: bold; }
         .sev-major { background-color: #fff3e0; color: #e65100; }
         .sev-minor { background-color: #f1f8e9; color: #33691e; }
-        .iso-badge { display: inline-block; padding: 6px 12px; background: #e3f2fd; color: #1565c0; border-radius: 4px; font-weight: bold; margin-bottom: 10px; }
+        .iso-badge { display: inline-block; padding: 6px 12px; background: #e3f2fd; color: #1565c0; border-radius: 4px; font-weight: bold; margin-bottom: 10px; margin-right: 10px; }
     </style>
 </head>
 <body>
-    <h1>Báo Cáo Kiểm Toán Bản Dịch EPUB & Tuân Thủ ISO 17100</h1>
+    <h1>Báo Cáo Kiểm Toán Bản Dịch (ISO 17100 & ISO 5060)</h1>
     <div class="card">
         <h2>Tổng Quan Quyết Định Phát Hành</h2>
         <p><strong>Mã Lần Chạy:</strong> {{ run_id }}</p>
@@ -46,6 +47,41 @@ HTML_TEMPLATE = """
         </ul>
         {% endif %}
     </div>
+
+    {% if iso5060_compliance %}
+    <div class="card">
+        <h2>Đánh Giá Chất Lượng ISO 5060 / MQM Error Typology</h2>
+        <div class="iso-badge">Xếp Hạng Chất Lượng: <span class="status-{{ iso5060_compliance.quality_grade }}">{{ iso5060_compliance.quality_grade }}</span></div>
+        <p><strong>Weighted Error Rate (WER):</strong> {{ iso5060_compliance.weighted_error_rate_per_1000_words }} điểm phạt / 1000 từ (Tổng điểm phạt: {{ iso5060_compliance.total_penalty_points }})</p>
+        <p><strong>Đánh Giá Tóm Tắt:</strong> {{ iso5060_compliance.summary_vi }}</p>
+        {% if iso5060_compliance.category_breakdowns %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Hạng Mục Lỗi MQM</th>
+                    <th>Critical (25đ)</th>
+                    <th>Major (5đ)</th>
+                    <th>Minor (1đ)</th>
+                    <th>Cosmetic (0.25đ)</th>
+                    <th>Tổng Điểm Phạt</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in iso5060_compliance.category_breakdowns %}
+                <tr>
+                    <td><strong>{{ b.category }}</strong></td>
+                    <td>{{ b.critical_count }}</td>
+                    <td>{{ b.major_count }}</td>
+                    <td>{{ b.minor_count }}</td>
+                    <td>{{ b.cosmetic_count }}</td>
+                    <td>{{ "%.2f"|format(b.weighted_penalty_points) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+    {% endif %}
 
     {% if iso_compliance %}
     <div class="card">
@@ -74,14 +110,6 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </tbody>
         </table>
-        {% if iso_compliance.recommendations_vi %}
-        <h3>Khuyến Nghị Cải Tiến Quy Trình:</h3>
-        <ul>
-            {% for rec in iso_compliance.recommendations_vi %}
-            <li>{{ rec }}</li>
-            {% endfor %}
-        </ul>
-        {% endif %}
     </div>
     {% endif %}
 
@@ -118,7 +146,7 @@ HTML_TEMPLATE = """
 
 
 class ReportGenerator:
-    """Generates all output artifacts including ISO 17100 compliance badges and recommendations."""
+    """Generates all output artifacts including ISO 17100 & ISO 5060 compliance reports."""
 
     @staticmethod
     def generate_all(
@@ -131,14 +159,16 @@ class ReportGenerator:
         run_id = audit_result["run_id"]
         findings: list[AIFinding] = audit_result["all_findings"]
         release_decision: ReleaseDecisionResponse = audit_result["release_decision"]
-        iso_compliance: ISO17100ComplianceReport | None = audit_result.get("iso_compliance")
+        iso17100_compliance: ISO17100ComplianceReport | None = audit_result.get("iso_compliance")
+        iso5060_compliance: ISO5060ComplianceReport | None = audit_result.get("iso5060_compliance")
 
         # 1. HTML Report
         template = Template(HTML_TEMPLATE)
         html_content = template.render(
             run_id=run_id,
             release_decision=release_decision,
-            iso_compliance=iso_compliance,
+            iso_compliance=iso17100_compliance,
+            iso5060_compliance=iso5060_compliance,
             findings=findings,
         )
         html_file = out_path / "audit_report.html"
@@ -154,7 +184,8 @@ class ReportGenerator:
                     "source_path": audit_result["source_path"],
                     "total_target_words": audit_result["total_target_words"],
                     "total_issues_found": len(findings),
-                    "iso17100_status": iso_compliance.overall_status if iso_compliance else "UNKNOWN",
+                    "iso17100_status": iso17100_compliance.overall_status if iso17100_compliance else "UNKNOWN",
+                    "iso5060_grade": iso5060_compliance.quality_grade if iso5060_compliance else "UNKNOWN",
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -164,8 +195,10 @@ class ReportGenerator:
 
         decision_file = out_path / "release_decision.json"
         decision_payload = release_decision.model_dump()
-        if iso_compliance:
-            decision_payload["iso17100_compliance"] = iso_compliance.model_dump()
+        if iso17100_compliance:
+            decision_payload["iso17100_compliance"] = iso17100_compliance.model_dump()
+        if iso5060_compliance:
+            decision_payload["iso5060_compliance"] = iso5060_compliance.model_dump()
 
         decision_file.write_text(
             json.dumps(decision_payload, ensure_ascii=False, indent=2),

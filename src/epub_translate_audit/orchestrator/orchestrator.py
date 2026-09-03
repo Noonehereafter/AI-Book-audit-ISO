@@ -18,8 +18,10 @@ from epub_translate_audit.ai.schemas import (
 )
 from epub_translate_audit.alignment.aligner import EPUBAligner
 from epub_translate_audit.compliance.iso17100 import ISO17100ComplianceEngine, ISO17100ComplianceReport
+from epub_translate_audit.compliance.iso5060 import ISO5060ComplianceEngine, ISO5060ComplianceReport
 from epub_translate_audit.config import Settings
 from epub_translate_audit.ingest.epub_parser import EPUBBook, EPUBParser, discover_source_epub
+from epub_translate_audit.ingest.linguagacha_adapter import LinguaGachaAdapter, LinguaGachaFile
 from epub_translate_audit.orchestrator.release_gate import ReleaseGateEngine
 from epub_translate_audit.orchestrator.self_evolution import SelfEvolutionEngine
 from epub_translate_audit.orchestrator.state_store import AuditStateStore
@@ -34,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 class AuditOrchestrator:
-    """Automated multi-agent orchestrator executing multi-pass translation audit with self-evolution and ISO 17100 compliance."""
+    """Automated multi-agent orchestrator executing multi-pass translation audit with ISO 17100 and ISO 5060 standards."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -158,14 +160,20 @@ class AuditOrchestrator:
         updated_learned_rules = self.evolution_engine.consolidate_session_learnings(all_valid_findings)
 
         # 5. ISO 17100 Quality Evaluation Step
-        iso_report = ISO17100ComplianceEngine.evaluate_compliance(
+        iso17100_report = ISO17100ComplianceEngine.evaluate_compliance(
             all_valid_findings,
             total_words=total_target_words,
             unaligned_source_blocks=len(align_result.unaligned_source_blocks),
             unaligned_target_blocks=len(align_result.unaligned_target_blocks),
         )
 
-        # 6. Release Gate Decision
+        # 6. ISO 5060 (MQM) Quality Evaluation Step
+        iso5060_report = ISO5060ComplianceEngine.evaluate_compliance(
+            all_valid_findings,
+            total_target_words=total_target_words,
+        )
+
+        # 7. Release Gate Decision
         release_decision = ReleaseGateEngine.evaluate(
             all_valid_findings,
             total_target_words=total_target_words,
@@ -185,7 +193,8 @@ class AuditOrchestrator:
             "align_result": align_result,
             "all_findings": all_valid_findings,
             "release_decision": release_decision,
-            "iso_compliance": iso_report,
+            "iso_compliance": iso17100_report,
+            "iso5060_compliance": iso5060_report,
             "total_target_words": total_target_words,
             "learned_rules": updated_learned_rules,
             "agent_errors": agent_errors,
