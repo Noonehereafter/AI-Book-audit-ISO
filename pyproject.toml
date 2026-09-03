@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "epub-translate-audit"
+version = "1.0.0"
+description = "Production-ready automated multi-agent EPUB translation audit tool"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "pyyaml>=6.0",
+    "httpx>=0.25.0",
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+    "jinja2>=3.1.0",
+    "tenacity>=8.2.0",
+    "rapidfuzz>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

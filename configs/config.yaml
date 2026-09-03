@@ -1,0 +1,20 @@
+llm:
+  provider_type: "openai"  # "openai" (dùng cho 9router, omniroute, kilo, LM Studio, Ollama) hoặc "gemini"
+  base_url: "http://localhost:11434/v1"  # Hoặc https://api.9router.com/v1, https://kilo.ai/v1, etc.
+  api_key: "dummy-key"
+  model_name: "gemini-2.5-flash"
+  temperature: 0.1
+  timeout_seconds: 60
+  max_retries: 3
+  thinking_budget: 12000
+
+audit:
+  deep_mode: true
+  auto_discover_source: true
+  allow_grandparent_discovery: true
+  output_dir: "audit_output"
+  cache_dir: ".audit_cache"
+
+completion:
+  maximum_workflow_rounds: 3
+  recheck_after_major_or_critical: true
