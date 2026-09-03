@@ -18,7 +18,7 @@ class EPUBBlock:
     spine_index: int
     xhtml_path: str
     xpath: str
-    kind: Literal["heading", "paragraph", "blockquote", "verse", "list_item", "table_cell", "note", "other"]
+    kind: Literal["heading", "paragraph", "blockquote", "verse", "list_item", "table_cell", "note", "image_only", "other"]
     text_raw: str
     text_normalized: str
     char_count: int
@@ -43,15 +43,16 @@ class EPUBBook:
 
 
 def normalize_text(text: str) -> str:
-    """Normalize text: Unicode NFC, whitespace collapse."""
+    """Normalize text: Unicode NFC, normalize quotes/dashes, collapse whitespace."""
     if not text:
         return ""
+    # Standardize spaces and curly quotes/dashes for uniform comparison
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
 class EPUBParser:
-    """Extract chapters and blocks from an EPUB file preserving reading order according to OPF spine."""
+    """Extract chapters and blocks from an EPUB file preserving reading order and handling edge cases."""
 
     def __init__(self, epub_path: str | Path) -> None:
         self.epub_path = Path(epub_path).resolve()
@@ -103,7 +104,6 @@ class EPUBParser:
                 try:
                     xhtml_bytes = z.read(xhtml_rel_path)
                 except KeyError:
-                    # Fallback lookup in case of case-mismatched or relative path variations
                     zip_names = z.namelist()
                     matched_name = None
                     for name in zip_names:
@@ -131,13 +131,34 @@ class EPUBParser:
                 tag_counters: dict[str, int] = {}
                 block_counter = 0
 
-                for elem in html_soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote", "li"]):
+                for elem in html_soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote", "li", "div", "img", "figure"]):
+                    tag_name = elem.name.lower()
+
+                    # Handle image-only blocks
+                    if tag_name in {"img", "figure"}:
+                        alt_text = elem.get("alt", "") or elem.get("title", "") or "[IMAGE]"
+                        block_id = f"{chapter_id}.b_{block_counter:03d}"
+                        block = EPUBBlock(
+                            block_id=block_id,
+                            chapter_id=chapter_id,
+                            spine_index=idx,
+                            xhtml_path=xhtml_rel_path,
+                            xpath=f"//{tag_name}[{block_counter + 1}]",
+                            kind="image_only",
+                            text_raw=alt_text,
+                            text_normalized=normalize_text(alt_text),
+                            char_count=len(alt_text),
+                            word_count=len(alt_text.split()),
+                        )
+                        chapter.blocks.append(block)
+                        block_counter += 1
+                        continue
+
                     raw_text = elem.get_text()
                     norm_text = normalize_text(raw_text)
                     if not norm_text:
                         continue
 
-                    tag_name = elem.name.lower()
                     tag_counters[tag_name] = tag_counters.get(tag_name, 0) + 1
                     xpath = f"//{tag_name}[{tag_counters[tag_name]}]"
 

@@ -13,7 +13,7 @@ class SemanticPatchItem:
     xpath: str
     target_tag: str
     class_name: str | None = None
-    action: str = "update"  # "update", "wrap_drop_cap", "format_footnote"
+    action: str = "update"  # "update", "wrap_drop_cap", "format_footnote", "preserve_verse"
 
 
 @dataclass
@@ -31,7 +31,7 @@ class EPUBTypesetterExtractor:
         ir_items = []
         tag_counters: dict[str, int] = {}
 
-        for elem in soup.find_all(["h1", "h2", "h3", "h4", "p", "blockquote", "li", "div"]):
+        for elem in soup.find_all(["h1", "h2", "h3", "h4", "p", "blockquote", "li", "div", "figure"]):
             text = elem.get_text().strip()
             if not text:
                 continue
@@ -51,7 +51,7 @@ class EPUBTypesetterExtractor:
 
 
 class EPUBTypesetterRenderer:
-    """Applies AI JSON Semantic Patches deterministically onto XHTML DOM without modifying text content."""
+    """Applies AI JSON Semantic Patches deterministically onto XHTML DOM, handling Drop Caps with opening quotes and verses."""
 
     @staticmethod
     def apply_patch(xhtml_content: str, patch: SemanticPatch) -> str:
@@ -60,7 +60,7 @@ class EPUBTypesetterRenderer:
         tag_counters: dict[str, int] = {}
         node_map: dict[str, Any] = {}
 
-        for elem in soup.find_all(["h1", "h2", "h3", "h4", "p", "blockquote", "li", "div"]):
+        for elem in soup.find_all(["h1", "h2", "h3", "h4", "p", "blockquote", "li", "div", "figure"]):
             text = elem.get_text().strip()
             if not text:
                 continue
@@ -85,15 +85,18 @@ class EPUBTypesetterRenderer:
                     classes.append(item.class_name)
                 elem["class"] = classes
 
+            # Action: drop cap (handles opening quotes like “A or "A)
             if item.action == "wrap_drop_cap" and elem.string:
                 raw_text = elem.string.strip()
                 if raw_text:
-                    first_char = raw_text[0]
-                    rest = raw_text[1:]
-                    elem.clear()
-                    span = soup.new_tag("span", attrs={"class": "drop-cap"})
-                    span.string = first_char
-                    elem.append(span)
-                    elem.append(rest)
+                    m = re.match(r"^([“\"'‘]?[A-Za-zÂĂĐÊÔƠƯâăđêôơưA-ZÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴa-z0-9])(.*)$", raw_text)
+                    if m:
+                        cap = m.group(1)
+                        rest = m.group(2)
+                        elem.clear()
+                        span = soup.new_tag("span", attrs={"class": "drop-cap"})
+                        span.string = cap
+                        elem.append(span)
+                        elem.append(rest)
 
         return str(soup)
