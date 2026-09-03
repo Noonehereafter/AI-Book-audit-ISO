@@ -27,9 +27,9 @@ class LLMClient:
         self.cache_dir = Path(cache_dir) if cache_dir else Path(".audit_cache/llm_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_cache_key(self, prompt: str, schema: type[BaseModel] | None) -> str:
+    def _get_cache_key(self, prompt: str, schema: type[BaseModel] | None, system_prompt: str | None = None) -> str:
         schema_name = schema.__name__ if schema else "raw"
-        raw = f"{self.config.provider_type}|{self.config.base_url}|{self.config.model_name}|{schema_name}|{prompt}"
+        raw = f"{self.config.provider_type}|{self.config.base_url}|{self.config.model_name}|{schema_name}|{system_prompt or ''}|{prompt}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def fetch_models(self) -> list[str]:
@@ -77,7 +77,7 @@ class LLMClient:
     )
     def generate_structured(self, prompt: str, schema: type[T], system_prompt: str | None = None) -> T:
         """Call LLM with structured JSON output enforced by Pydantic schema."""
-        cache_key = self._get_cache_key(prompt, schema)
+        cache_key = self._get_cache_key(prompt, schema, system_prompt)
         cache_file = self.cache_dir / f"{cache_key}.json"
 
         if cache_file.exists():
@@ -130,7 +130,6 @@ class LLMClient:
             else:
                 raw_text = res_data["choices"][0]["message"]["content"]
 
-        # Clean raw_text if wrapped in markdown
         cleaned_text = raw_text.strip()
         if cleaned_text.startswith("```json"):
             cleaned_text = cleaned_text[7:]

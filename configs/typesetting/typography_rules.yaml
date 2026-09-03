@@ -1,0 +1,68 @@
+# Cấu hình Quy tắc Typesetting cho EPUB Xuất bản (Production-Ready)
+
+typography:
+  first_line_indent: "1.25em"
+  no_indent_class: "no-indent"
+  drop_cap:
+    enabled: true
+    lines: 3
+    class_name: "drop-cap"
+  heading_hierarchy:
+    h1: "chapter-title"
+    h2: "section-title"
+    h3: "sub-section-title"
+  scene_break:
+    symbol: "❖ ❖ ❖"
+    class_name: "scene-break"
+  dialogue:
+    dash: "— "
+  footnotes:
+    popup_epub3: true
+    note_ref_class: "noteref"
+    note_aside_class: "popup-footnote"
+  page_break:
+    before_chapter: true
+    css_rule: "break-before: page; page-break-before: always;"
+
+css_template: |
+  /* Standard Editorial EPUB CSS */
+  body {
+    font-family: serif;
+    line-height: 1.4;
+    text-align: justify;
+    margin: 5%;
+  }
+  p {
+    text-indent: 1.25em;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  p.no-indent, h1 + p, h2 + p, h3 + p, blockquote + p {
+    text-indent: 0;
+  }
+  h1.chapter-title {
+    text-align: center;
+    margin-top: 2em;
+    margin-bottom: 1.5em;
+    break-before: page;
+    page-break-before: always;
+  }
+  span.drop-cap {
+    float: left;
+    font-size: 3.2em;
+    line-height: 0.8;
+    padding-top: 4px;
+    padding-right: 6px;
+    font-weight: bold;
+  }
+  div.scene-break {
+    text-align: center;
+    margin: 1.5em 0;
+    letter-spacing: 0.5em;
+  }
+  aside.popup-footnote {
+    font-size: 0.9em;
+    border-top: 1px solid #ccc;
+    padding-top: 0.5em;
+    margin-top: 1em;
+  }
