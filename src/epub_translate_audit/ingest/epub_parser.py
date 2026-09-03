@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
+import urllib.parse
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,8 +66,8 @@ class EPUBParser:
             if not rootfile_tag or not rootfile_tag.get("full-path"):
                 raise ValueError("Invalid EPUB: META-INF/container.xml missing rootfile")
 
-            opf_path = str(rootfile_tag["full-path"])
-            opf_dir = os.path.dirname(opf_path)
+            opf_path = urllib.parse.unquote(str(rootfile_tag["full-path"]))
+            opf_dir = posixpath.dirname(opf_path)
 
             opf_bytes = z.read(opf_path)
             opf_soup = BeautifulSoup(opf_bytes, "xml")
@@ -83,7 +85,8 @@ class EPUBParser:
                     item_id = item.get("id")
                     href = item.get("href")
                     if item_id and href:
-                        full_href = os.path.join(opf_dir, href).replace("\\", "/") if opf_dir else href
+                        href_unquoted = urllib.parse.unquote(href)
+                        full_href = posixpath.normpath(posixpath.join(opf_dir, href_unquoted)) if opf_dir else posixpath.normpath(href_unquoted)
                         manifest[item_id] = full_href
 
             spine_ids: list[str] = []
@@ -100,7 +103,17 @@ class EPUBParser:
                 try:
                     xhtml_bytes = z.read(xhtml_rel_path)
                 except KeyError:
-                    continue
+                    # Fallback lookup in case of case-mismatched or relative path variations
+                    zip_names = z.namelist()
+                    matched_name = None
+                    for name in zip_names:
+                        if posixpath.normpath(name) == xhtml_rel_path or urllib.parse.unquote(name) == xhtml_rel_path:
+                            matched_name = name
+                            break
+                    if matched_name:
+                        xhtml_bytes = z.read(matched_name)
+                    else:
+                        continue
 
                 html_soup = BeautifulSoup(xhtml_bytes, "html.parser")
                 chapter_id = f"ch_{idx:03d}"

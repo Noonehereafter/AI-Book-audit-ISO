@@ -20,6 +20,7 @@ from epub_translate_audit.alignment.aligner import EPUBAligner
 from epub_translate_audit.config import Settings
 from epub_translate_audit.ingest.epub_parser import EPUBBook, EPUBParser, discover_source_epub
 from epub_translate_audit.orchestrator.release_gate import ReleaseGateEngine
+from epub_translate_audit.orchestrator.self_evolution import SelfEvolutionEngine
 from epub_translate_audit.orchestrator.state_store import AuditStateStore
 from epub_translate_audit.prompts.audit_prompts import (
     CONTINUITY_AUDIT_PROMPT,
@@ -32,12 +33,13 @@ logger = logging.getLogger(__name__)
 
 
 class AuditOrchestrator:
-    """Automated multi-agent orchestrator executing multi-pass translation audit."""
+    """Automated multi-agent orchestrator executing multi-pass translation audit with self-evolution."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.llm_client = LLMClient(settings.llm)
         self.state_store = AuditStateStore(Path(settings.audit.cache_dir) / "state.db")
+        self.evolution_engine = SelfEvolutionEngine()
 
     def run_audit(self, translated_epub_path: str | Path, source_epub_path: str | Path | None = None) -> dict[str, Any]:
         translated_path = Path(translated_epub_path).resolve()
@@ -61,8 +63,16 @@ class AuditOrchestrator:
         aligner = EPUBAligner(src_book, vi_book)
         align_result = aligner.align()
 
+        # Load previously learned rules from system evolution engine
+        learned_rules = self.evolution_engine.load_learned_rules()
+        learned_prompt_context = ""
+        if learned_rules:
+            rules_str = "\n".join([f"- [{r.rule_id}]: {r.pattern_description_vi} => {r.remediation_guideline_vi}" for r in learned_rules[:10]])
+            learned_prompt_context = f"\n\nSystem Learned Rules (Prior Audits Knowledge Base):\n{rules_str}\n"
+
         all_valid_findings: list[AIFinding] = []
         total_target_words = sum(b.word_count for ch in vi_book.chapters for b in ch.blocks)
+        agent_errors: list[str] = []
 
         for pair in align_result.aligned_pairs:
             pair_findings: list[AIFinding] = []
@@ -75,8 +85,11 @@ class AuditOrchestrator:
                 sem_prompt = (
                     SEMANTIC_AUDIT_PROMPT.replace("{{source_text}}", pair.source_text)
                     .replace("{{target_text}}", pair.target_text)
+                    + learned_prompt_context
                 )
-                sem_findings = self._call_agent(sem_prompt, "Semantic Auditor")
+                sem_findings, err = self._call_agent(sem_prompt, "Semantic Auditor")
+                if err:
+                    agent_errors.append(f"Semantic Auditor [{pair.pair_id}]: {err}")
                 self.state_store.save_pair_findings(
                     pair.pair_id, run_id, "semantic_pass", [f.model_dump() for f in sem_findings]
                 )
@@ -91,8 +104,11 @@ class AuditOrchestrator:
                     cont_prompt = (
                         CONTINUITY_AUDIT_PROMPT.replace("{{source_text}}", pair.source_text)
                         .replace("{{target_text}}", pair.target_text)
+                        + learned_prompt_context
                     )
-                    cont_findings = self._call_agent(cont_prompt, "Continuity Auditor")
+                    cont_findings, err = self._call_agent(cont_prompt, "Continuity Auditor")
+                    if err:
+                        agent_errors.append(f"Continuity Auditor [{pair.pair_id}]: {err}")
                     self.state_store.save_pair_findings(
                         pair.pair_id, run_id, "continuity_pass", [f.model_dump() for f in cont_findings]
                     )
@@ -106,8 +122,11 @@ class AuditOrchestrator:
                     lit_prompt = (
                         LITERARY_AUDIT_PROMPT.replace("{{source_text}}", pair.source_text)
                         .replace("{{target_text}}", pair.target_text)
+                        + learned_prompt_context
                     )
-                    lit_findings = self._call_agent(lit_prompt, "Literary Auditor")
+                    lit_findings, err = self._call_agent(lit_prompt, "Literary Auditor")
+                    if err:
+                        agent_errors.append(f"Literary Auditor [{pair.pair_id}]: {err}")
                     self.state_store.save_pair_findings(
                         pair.pair_id, run_id, "literary_pass", [f.model_dump() for f in lit_findings]
                     )
@@ -121,8 +140,11 @@ class AuditOrchestrator:
                     red_prompt = (
                         RED_TEAM_PROMPT.replace("{{source_text}}", pair.source_text)
                         .replace("{{target_text}}", pair.target_text)
+                        + learned_prompt_context
                     )
-                    red_findings = self._call_agent(red_prompt, "Red Team Auditor")
+                    red_findings, err = self._call_agent(red_prompt, "Red Team Auditor")
+                    if err:
+                        agent_errors.append(f"Red Team Auditor [{pair.pair_id}]: {err}")
                     self.state_store.save_pair_findings(
                         pair.pair_id, run_id, "red_team_pass", [f.model_dump() for f in red_findings]
                     )
@@ -131,12 +153,22 @@ class AuditOrchestrator:
             valid, _ = EvidenceVerifier.filter_valid_findings(pair_findings, pair.source_text, pair.target_text)
             all_valid_findings.extend(valid)
 
+        # 4. Self-Evolution Step: Synthesize learnings from findings
+        updated_learned_rules = self.evolution_engine.consolidate_session_learnings(all_valid_findings)
+
+        # 5. Release Gate Decision
         release_decision = ReleaseGateEngine.evaluate(
             all_valid_findings,
             total_target_words=total_target_words,
             unaligned_source_count=len(align_result.unaligned_source_blocks),
             unaligned_target_count=len(align_result.unaligned_target_blocks),
         )
+
+        # If LLM API agent errors occurred, prevent false PASS and require review
+        if agent_errors:
+            release_decision.status = "REVIEW_REQUIRED"
+            release_decision.hard_blockers.extend(agent_errors[:5])
+            release_decision.quality_summary_vi += f" (Phát hiện {len(agent_errors)} lỗi gọi Agent LLM - Cần rà soát lại)"
 
         return {
             "run_id": run_id,
@@ -146,12 +178,14 @@ class AuditOrchestrator:
             "all_findings": all_valid_findings,
             "release_decision": release_decision,
             "total_target_words": total_target_words,
+            "learned_rules": updated_learned_rules,
+            "agent_errors": agent_errors,
         }
 
-    def _call_agent(self, prompt: str, system_prompt: str) -> list[AIFinding]:
+    def _call_agent(self, prompt: str, system_prompt: str) -> tuple[list[AIFinding], str | None]:
         try:
             resp = self.llm_client.generate_structured(prompt, AuditPassResponse, system_prompt=system_prompt)
-            return resp.findings
+            return resp.findings, None
         except Exception as e:
-            logger.debug("Agent call (%s) fallback: %s", system_prompt, e)
-            return []
+            logger.error("Agent call (%s) failed: %s", system_prompt, e)
+            return [], str(e)

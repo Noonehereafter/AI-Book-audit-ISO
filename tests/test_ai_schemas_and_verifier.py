@@ -39,4 +39,4 @@ def test_evidence_verification():
 
     errs_inv = EvidenceVerifier.verify_finding(invalid_f, source, target)
     assert len(errs_inv) == 1
-    assert "not found in target text" in errs_inv[0]
+    assert "not sufficiently matched" in errs_inv[0]
