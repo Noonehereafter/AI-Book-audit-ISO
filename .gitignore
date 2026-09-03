@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.audit_cache/
+audit_output/
+.pytest_cache/
