@@ -17,6 +17,7 @@ from epub_translate_audit.ai.schemas import (
     Severity,
 )
 from epub_translate_audit.alignment.aligner import EPUBAligner
+from epub_translate_audit.compliance.iso17100 import ISO17100ComplianceEngine, ISO17100ComplianceReport
 from epub_translate_audit.config import Settings
 from epub_translate_audit.ingest.epub_parser import EPUBBook, EPUBParser, discover_source_epub
 from epub_translate_audit.orchestrator.release_gate import ReleaseGateEngine
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class AuditOrchestrator:
-    """Automated multi-agent orchestrator executing multi-pass translation audit with self-evolution."""
+    """Automated multi-agent orchestrator executing multi-pass translation audit with self-evolution and ISO 17100 compliance."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -153,10 +154,18 @@ class AuditOrchestrator:
             valid, _ = EvidenceVerifier.filter_valid_findings(pair_findings, pair.source_text, pair.target_text)
             all_valid_findings.extend(valid)
 
-        # 4. Self-Evolution Step: Synthesize learnings from findings
+        # 4. Self-Evolution Step
         updated_learned_rules = self.evolution_engine.consolidate_session_learnings(all_valid_findings)
 
-        # 5. Release Gate Decision
+        # 5. ISO 17100 Quality Evaluation Step
+        iso_report = ISO17100ComplianceEngine.evaluate_compliance(
+            all_valid_findings,
+            total_words=total_target_words,
+            unaligned_source_blocks=len(align_result.unaligned_source_blocks),
+            unaligned_target_blocks=len(align_result.unaligned_target_blocks),
+        )
+
+        # 6. Release Gate Decision
         release_decision = ReleaseGateEngine.evaluate(
             all_valid_findings,
             total_target_words=total_target_words,
@@ -164,7 +173,6 @@ class AuditOrchestrator:
             unaligned_target_count=len(align_result.unaligned_target_blocks),
         )
 
-        # If LLM API agent errors occurred, prevent false PASS and require review
         if agent_errors:
             release_decision.status = "REVIEW_REQUIRED"
             release_decision.hard_blockers.extend(agent_errors[:5])
@@ -177,6 +185,7 @@ class AuditOrchestrator:
             "align_result": align_result,
             "all_findings": all_valid_findings,
             "release_decision": release_decision,
+            "iso_compliance": iso_report,
             "total_target_words": total_target_words,
             "learned_rules": updated_learned_rules,
             "agent_errors": agent_errors,

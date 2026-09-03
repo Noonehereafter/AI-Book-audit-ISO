@@ -7,34 +7,36 @@ import pandas as pd
 from jinja2 import Template
 
 from epub_translate_audit.ai.schemas import AIFinding, ReleaseDecisionResponse
+from epub_translate_audit.compliance.iso17100 import ISO17100ComplianceReport
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <title>Báo Cáo Audit Bản Dịch EPUB - {{ run_id }}</title>
+    <title>Báo Cáo Audit Bản Dịch EPUB (ISO 17100) - {{ run_id }}</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 30px; background-color: #f9f9f9; color: #333; }
         .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .status-PASS { color: #2e7d32; font-weight: bold; }
-        .status-CONDITIONAL_PASS { color: #ed6c02; font-weight: bold; }
-        .status-FAIL { color: #d32f2f; font-weight: bold; }
+        .status-PASS, .status-COMPLIANT { color: #2e7d32; font-weight: bold; }
+        .status-CONDITIONAL_PASS, .status-CONDITIONALLY_COMPLIANT { color: #ed6c02; font-weight: bold; }
+        .status-FAIL, .status-NON_COMPLIANT { color: #d32f2f; font-weight: bold; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background-color: #f0f0f0; }
         .sev-critical { background-color: #ffebee; color: #c62828; font-weight: bold; }
         .sev-major { background-color: #fff3e0; color: #e65100; }
         .sev-minor { background-color: #f1f8e9; color: #33691e; }
+        .iso-badge { display: inline-block; padding: 6px 12px; background: #e3f2fd; color: #1565c0; border-radius: 4px; font-weight: bold; margin-bottom: 10px; }
     </style>
 </head>
 <body>
-    <h1>Báo Cáo Kiểm Toán Bản Dịch EPUB</h1>
+    <h1>Báo Cáo Kiểm Toán Bản Dịch EPUB & Tuân Thủ ISO 17100</h1>
     <div class="card">
         <h2>Tổng Quan Quyết Định Phát Hành</h2>
         <p><strong>Mã Lần Chạy:</strong> {{ run_id }}</p>
-        <p><strong>Trạng Thái:</strong> <span class="status-{{ release_decision.status }}">{{ release_decision.status }}</span></p>
-        <p><strong>Tóm Tắt:</strong> {{ release_decision.quality_summary_vi }}</p>
+        <p><strong>Trạng Thái Phát Hành:</strong> <span class="status-{{ release_decision.status }}">{{ release_decision.status }}</span></p>
+        <p><strong>Tóm Tắt Chất Lượng:</strong> {{ release_decision.quality_summary_vi }}</p>
         {% if release_decision.hard_blockers %}
         <h3>Hard Blockers:</h3>
         <ul>
@@ -44,6 +46,44 @@ HTML_TEMPLATE = """
         </ul>
         {% endif %}
     </div>
+
+    {% if iso_compliance %}
+    <div class="card">
+        <h2>Chứng Nhận Quy Trình Tuân Thủ ISO 17100</h2>
+        <div class="iso-badge">ISO 17100 Status: <span class="status-{{ iso_compliance.overall_status }}">{{ iso_compliance.overall_status }}</span></div>
+        <p><strong>Đánh Giá Tổng Thể:</strong> {{ iso_compliance.certificate_summary_vi }}</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Giai Đoạn Quy Trình ISO 17100</th>
+                    <th>Trạng Thái</th>
+                    <th>Điểm Chất Lượng</th>
+                    <th>Số Lỗi Ghi Nhận</th>
+                    <th>Ghi Chú Đánh Giá</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for phase in iso_compliance.phase_results %}
+                <tr>
+                    <td><strong>{{ phase.phase.upper() }}</strong></td>
+                    <td><span class="status-{{ phase.status }}">{{ phase.status }}</span></td>
+                    <td>{{ "%.1f"|format(phase.score_percentage) }}%</td>
+                    <td>{{ phase.findings_count }}</td>
+                    <td>{{ phase.notes_vi }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if iso_compliance.recommendations_vi %}
+        <h3>Khuyến Nghị Cải Tiến Quy Trình:</h3>
+        <ul>
+            {% for rec in iso_compliance.recommendations_vi %}
+            <li>{{ rec }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <div class="card">
         <h2>Danh Sách Lỗi Phát Hiện ({{ findings|length }})</h2>
@@ -78,7 +118,7 @@ HTML_TEMPLATE = """
 
 
 class ReportGenerator:
-    """Generates all output artifacts: HTML report, XLSX issue ledger, CSVs, and JSON manifests."""
+    """Generates all output artifacts including ISO 17100 compliance badges and recommendations."""
 
     @staticmethod
     def generate_all(
@@ -91,12 +131,14 @@ class ReportGenerator:
         run_id = audit_result["run_id"]
         findings: list[AIFinding] = audit_result["all_findings"]
         release_decision: ReleaseDecisionResponse = audit_result["release_decision"]
+        iso_compliance: ISO17100ComplianceReport | None = audit_result.get("iso_compliance")
 
         # 1. HTML Report
         template = Template(HTML_TEMPLATE)
         html_content = template.render(
             run_id=run_id,
             release_decision=release_decision,
+            iso_compliance=iso_compliance,
             findings=findings,
         )
         html_file = out_path / "audit_report.html"
@@ -112,6 +154,7 @@ class ReportGenerator:
                     "source_path": audit_result["source_path"],
                     "total_target_words": audit_result["total_target_words"],
                     "total_issues_found": len(findings),
+                    "iso17100_status": iso_compliance.overall_status if iso_compliance else "UNKNOWN",
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -120,8 +163,12 @@ class ReportGenerator:
         )
 
         decision_file = out_path / "release_decision.json"
+        decision_payload = release_decision.model_dump()
+        if iso_compliance:
+            decision_payload["iso17100_compliance"] = iso_compliance.model_dump()
+
         decision_file.write_text(
-            release_decision.model_dump_json(indent=2),
+            json.dumps(decision_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
